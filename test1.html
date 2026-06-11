@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PS4 WebKit CVE-2025-46298 Array Sinking Probe</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #101216;
+      color: #eef2f8;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 16px;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 22px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 25px;
+      font-weight: 700;
+    }
+
+    p {
+      margin: 8px 0;
+      color: #c7d0dc;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 18px 0;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid #4a5a72;
+      border-radius: 6px;
+      background: #1b2433;
+      color: #fff;
+      padding: 10px 14px;
+      font-size: 15px;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .status {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 8px;
+      margin: 16px 0;
+    }
+
+    .metric {
+      border: 1px solid #283447;
+      border-radius: 6px;
+      padding: 10px;
+      background: #151b26;
+    }
+
+    .metric span {
+      display: block;
+      color: #91a1b7;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 4px;
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    #log {
+      min-height: 360px;
+      margin: 0;
+      padding: 12px;
+      overflow: auto;
+      white-space: pre-wrap;
+      border: 1px solid #283447;
+      border-radius: 6px;
+      background: #090b0f;
+      color: #dce7f5;
+      line-height: 1.35;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+    }
+
+    .ok { color: #75df8a; }
+    .warn { color: #ffd36a; }
+    .bad { color: #ff7474; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>PS4 WebKit CVE-2025-46298 Array Sinking Probe</h1>
+  <p>This page stress-tests JavaScriptCore array allocation sinking. A fixed build should keep running and report only OK lines.</p>
+  <p>Suspicious signs: WebProcess crash, browser/tab reload, visible BAD line, or an exception mentioning a wrong value.</p>
+
+  <div class="toolbar">
+    <button id="startButton" type="button">Start Test</button>
+    <button id="stopButton" type="button" disabled>Stop</button>
+    <button id="clearButton" type="button">Clear Log</button>
+  </div>
+
+  <section class="status" aria-label="status">
+    <div class="metric"><span>State</span><strong id="state">idle</strong></div>
+    <div class="metric"><span>Rounds</span><strong id="rounds">0</strong></div>
+    <div class="metric"><span>Iterations</span><strong id="iterations">0</strong></div>
+    <div class="metric"><span>Failures</span><strong id="failures">0</strong></div>
+  </section>
+
+  <pre id="log"></pre>
+</main>
+
+<script>
+"use strict";
+
+(function () {
+  var running = false;
+  var totalRounds = 0;
+  var totalIterations = 0;
+  var totalFailures = 0;
+  var sink = [];
+
+  var startButton = document.getElementById("startButton");
+  var stopButton = document.getElementById("stopButton");
+  var clearButton = document.getElementById("clearButton");
+  var logEl = document.getElementById("log");
+  var stateEl = document.getElementById("state");
+  var roundsEl = document.getElementById("rounds");
+  var iterationsEl = document.getElementById("iterations");
+  var failuresEl = document.getElementById("failures");
+
+  function sceLog(message) {
+    try {
+      if (window.navigator && navigator.sce && navigator.sce.log)
+        navigator.sce.log("[cve-2025-46298-array-sink] " + message);
+    } catch (e) {
+      // Ignore PS4 logging availability differences.
+    }
+  }
+
+  function write(message, className) {
+    var line = document.createElement("div");
+    if (className)
+      line.className = className;
+    line.textContent = new Date().toISOString() + "  " + message;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+    sceLog(message);
+  }
+
+  function updateState(state) {
+    stateEl.textContent = state;
+    roundsEl.textContent = String(totalRounds);
+    iterationsEl.textContent = String(totalIterations);
+    failuresEl.textContent = String(totalFailures);
+  }
+
+  function fail(name, actual, expected) {
+    totalFailures++;
+    updateState("failure");
+    write(name + " BAD: got " + describe(actual) + ", expected " + describe(expected), "bad");
+    throw new Error(name + " mismatch");
+  }
+
+  function describe(value) {
+    if (value === undefined)
+      return "undefined";
+    if (value === null)
+      return "null";
+    if (typeof value === "object") {
+      try {
+        return JSON.stringify(value);
+      } catch (e) {
+        return Object.prototype.toString.call(value);
+      }
+    }
+    return String(value);
+  }
+
+  function sameValue(name, actual, expected) {
+    if (actual !== expected)
+      fail(name, actual, expected);
+  }
+
+  function testInt32ArraySinkingWithConditionalWrite(shouldInitialize) {
+    var arr = new Array(2);
+    if (shouldInitialize)
+      arr[0] = 42;
+    return arr[0];
+  }
+
+  function testDoubleArraySinkingWithConditionalWrite(shouldInitialize) {
+    var arr = new Array(2);
+    if (shouldInitialize)
+      arr[0] = 42.5;
+    return arr[0];
+  }
+
+  function testContiguousArraySinkingWithConditionalWrite(shouldInitialize) {
+    var arr = new Array(2);
+    if (shouldInitialize)
+      arr[0] = { value: 42 };
+    return arr[0];
+  }
+
+  function testDiamondInitialization(obj, flag) {
+    var arr = new Array(4);
+    if (flag)
+      arr[0] = 1;
+    else
+      arr[0] = obj.foo;
+    return arr[0];
+  }
+
+  function testHoleReadWithObject(obj) {
+    var arr = new Array(4);
+    arr[0] = obj[1];
+    return arr[1] ? arr : 0;
+  }
+
+  function testHoleReadDirect(flag) {
+    var arr = new Array(8);
+    if (flag)
+      arr[3] = 13.37;
+    return arr[3];
+  }
+
+  function testMergedPaths(flag, value) {
+    var arr = new Array(6);
+    if (flag) {
+      arr[0] = value;
+      arr[1] = 7;
+    } else {
+      arr[0] = value;
+    }
+    return arr[1];
+  }
+
+  function churnHeap(seed) {
+    var local = [];
+    for (var i = 0; i < 1500; ++i)
+      local.push({ index: i, seed: seed, text: "heap-churn-" + seed + "-" + i });
+    sink.push(local);
+    if (sink.length > 8)
+      sink.shift();
+  }
+
+  function runOneIteration(i) {
+    var obj1 = { foo: 1, 1: 1 };
+    var obj2 = { 1: 1.4 };
+    var obj3 = { 1: { marker: 7 } };
+
+    sameValue("int32 true", testInt32ArraySinkingWithConditionalWrite(true), 42);
+    sameValue("int32 false", testInt32ArraySinkingWithConditionalWrite(false), undefined);
+    sameValue("double true", testDoubleArraySinkingWithConditionalWrite(true), 42.5);
+    sameValue("double false", testDoubleArraySinkingWithConditionalWrite(false), undefined);
+
+    var objectResult = testContiguousArraySinkingWithConditionalWrite(true);
+    if (!objectResult || objectResult.value !== 42)
+      fail("contiguous true", objectResult, "{ value: 42 }");
+    sameValue("contiguous false", testContiguousArraySinkingWithConditionalWrite(false), undefined);
+
+    sameValue("diamond true/false", testDiamondInitialization(obj1, i & 1), 1);
+    sameValue("hole object int", testHoleReadWithObject(obj1), 0);
+    sameValue("hole object double", testHoleReadWithObject(obj2), 0);
+    sameValue("hole object cell", testHoleReadWithObject(obj3), 0);
+    sameValue("direct hole true", testHoleReadDirect(true), 13.37);
+    sameValue("direct hole false", testHoleReadDirect(false), undefined);
+    sameValue("merged path true", testMergedPaths(true, i), 7);
+    sameValue("merged path false", testMergedPaths(false, i), undefined);
+
+    if ((i & 511) === 0)
+      churnHeap(i);
+  }
+
+  function runChunk(roundNumber, iterationsPerChunk) {
+    for (var i = 0; i < iterationsPerChunk; ++i) {
+      runOneIteration(i + roundNumber * iterationsPerChunk);
+      totalIterations++;
+    }
+  }
+
+  function tick() {
+    if (!running)
+      return;
+
+    try {
+      runChunk(totalRounds, 3000);
+      totalRounds++;
+      updateState("running");
+      write("round " + totalRounds + " ok, total iterations " + totalIterations, "ok");
+      setTimeout(tick, 0);
+    } catch (e) {
+      running = false;
+      startButton.disabled = false;
+      stopButton.disabled = true;
+      totalFailures++;
+      updateState("stopped");
+      write("exception: " + (e && e.stack ? e.stack : e), "bad");
+    }
+  }
+
+  function start() {
+    if (running)
+      return;
+    running = true;
+    startButton.disabled = true;
+    stopButton.disabled = false;
+    updateState("running");
+    write("starting test; fixed builds should only show OK rounds", "warn");
+    setTimeout(tick, 0);
+  }
+
+  function stop() {
+    running = false;
+    startButton.disabled = false;
+    stopButton.disabled = true;
+    updateState("stopped");
+    write("stopped by user", "warn");
+  }
+
+  function clearLog() {
+    logEl.textContent = "";
+  }
+
+  startButton.onclick = start;
+  stopButton.onclick = stop;
+  clearButton.onclick = clearLog;
+
+  updateState("idle");
+  write("ready; press Start Test", "warn");
+})();
+</script>
+</body>
+</html>
