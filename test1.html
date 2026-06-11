@@ -1,101 +1,141 @@
-      }
-      tick();
-    `;
-  }
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PS4 navigator.sce Surface Probe</title>
+  <style>
+    body { margin: 0; background: #101216; color: #edf3fb; font: 15px Arial, Helvetica, sans-serif; }
+    main { max-width: 980px; margin: 0 auto; padding: 20px; }
+    button { padding: 10px 14px; border: 1px solid #4f5f75; border-radius: 6px; background: #1b2636; color: #fff; }
+    pre { min-height: 430px; white-space: pre-wrap; overflow: auto; padding: 12px; border: 1px solid #283448; border-radius: 6px; background: #07090d; font: 13px Consolas, "Courier New", monospace; }
+    .ok { color: #78e08e; }
+    .bad { color: #ff7474; }
+    .warn { color: #ffd36c; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>navigator.sce Surface Probe</h1>
+  <p>Non-destructive probe. It lists exposed PS4 browser native APIs and lightly tests safe getters/limits.</p>
+  <button id="run">Run Probe</button>
+  <pre id="log"></pre>
+</main>
+<script>
+"use strict";
 
-  function startWorkers() {
-    if (!window.Worker || !window.Blob || !window.URL) {
-      log("workers unavailable in this browser context", "warn");
-      return;
-    }
+(function () {
+  var logEl = document.getElementById("log");
+
+  function line(s, cls) {
+    var div = document.createElement("div");
+    div.className = cls || "";
+    div.textContent = new Date().toISOString() + "  " + s;
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
     try {
-      var blob = new Blob([workerSource()], { type: "application/javascript" });
-      var url = URL.createObjectURL(blob);
-      for (var i = 0; i < 2; ++i) {
-        var w = new Worker(url);
-        w.onmessage = function (event) {
-          workerMsgs++;
-          if (event.data && event.data.type === "bad") {
-            failures++;
-            log("worker BAD " + event.data.name + " got=" + event.data.got + " calls=" + event.data.calls, "bad");
-          } else if ((workerMsgs & 15) === 0)
-            log("worker ok messages=" + workerMsgs, "ok");
-          update(running ? "running" : "stopped");
-        };
-        w.onerror = function (event) {
-          failures++;
-          log("worker exception " + event.message + " line=" + event.lineno, "bad");
-          update("failure");
-        };
-        workers.push(w);
-      }
-      log("started " + workers.length + " workers", "ok");
-    } catch (e) {
-      log("worker startup failed: " + e, "warn");
-    }
+      if (navigator.sce && navigator.sce.log)
+        navigator.sce.log("[surface-probe] " + s);
+    } catch (e) { }
   }
 
-  function stopWorkers() {
-    for (var i = 0; i < workers.length; ++i) {
-      try { workers[i].postMessage("stop"); workers[i].terminate(); } catch (e) { }
+  function typeOfPath(path) {
+    var parts = path.split(".");
+    var obj = window;
+    for (var i = 0; i < parts.length; ++i) {
+      if (!obj || !(parts[i] in obj))
+        return "missing";
+      obj = obj[parts[i]];
     }
-    workers = [];
+    return typeof obj;
   }
 
-  function chunk() {
-    if (!running)
-      return;
+  function getPath(path) {
+    var parts = path.split(".");
+    var obj = window;
+    for (var i = 0; i < parts.length; ++i)
+      obj = obj[parts[i]];
+    return obj;
+  }
+
+  function callSafe(name, fn) {
     try {
-      for (var i = 0; i < 25000; ++i)
-        exercise(round * 25000 + i);
-      round++;
-      update("running");
-      log("main round " + round + " ok, calls " + calls, "ok");
-      setTimeout(chunk, 0);
+      var value = fn();
+      line(name + " => " + String(value), "ok");
     } catch (e) {
-      failures++;
-      running = false;
-      stopWorkers();
-      update("stopped");
-      log("main exception: " + (e && e.stack ? e.stack : e), "bad");
+      line(name + " threw: " + (e && e.message ? e.message : e), "warn");
     }
   }
 
-  function start() {
-    if (running)
-      return;
-    running = true;
-    update("warming");
-    log("starting v3; this version auto-warms hot functions first", "warn");
-    setTimeout(function () {
-      try {
-        warm();
-        update("running");
-        startWorkers();
-        chunk();
-      } catch (e) {
-        failures++;
-        running = false;
-        update("stopped");
-        log("warmup exception: " + (e && e.stack ? e.stack : e), "bad");
-      }
-    }, 0);
-  }
-
-  document.getElementById("start").onclick = start;
-  document.getElementById("stop").onclick = function () {
-    running = false;
-    stopWorkers();
-    update("stopped");
-    log("stopped", "warn");
-  };
-  document.getElementById("clear").onclick = function () {
+  function run() {
     logEl.textContent = "";
-  };
+    line("starting navigator.sce surface probe", "warn");
 
-  update("idle");
-  log("ready; auto-starting in 1 second", "warn");
-  setTimeout(start, 1000);
+    var paths = [
+      "navigator.sce",
+      "navigator.sce.log",
+      "navigator.sce.postMessage",
+      "navigator.sce.sendMessage",
+      "navigator.sce.getNetworkTime",
+      "navigator.sce.getDebugNetworkTime",
+      "navigator.sce.getEventFakeTime",
+      "navigator.sce.getAdTime",
+      "navigator.sce.getRemotePlayStatus",
+      "navigator.sce.isRemotePlaying",
+      "navigator.sce.readRegistries",
+      "navigator.sce.isLiveAreaFocused",
+      "navigator.sce.isThemeBgExist",
+      "navigator.sce.hasNeoMode",
+      "navigator.sce.getImageByBase64",
+      "navigator.sce.isVideoOutCapability",
+      "navigator.sce.getSupportedHdcpVersion",
+      "navigator.sce.ime",
+      "navigator.sce.ime.OpenDialog",
+      "navigator.sce.ime.GetDialogStatus",
+      "navigator.sce.ime.GetDialogResult",
+      "navigator.sce.jit",
+      "navigator.sce.jit.togglejit",
+      "navigator.sce.jit.enableJit",
+      "navigator.sce.performance",
+      "navigator.sce.performance.clear",
+      "navigator.sce.performance.memoryCache",
+      "navigator.sce.performance.garbageCollect",
+      "navigator.sce.performance.restartProcess"
+    ];
+
+    for (var i = 0; i < paths.length; ++i)
+      line(paths[i] + " : " + typeOfPath(paths[i]), typeOfPath(paths[i]) === "missing" ? "bad" : "ok");
+
+    if (typeOfPath("navigator.sce.getNetworkTime") === "function")
+      callSafe("getNetworkTime()", function () { return navigator.sce.getNetworkTime(); });
+    if (typeOfPath("navigator.sce.getRemotePlayStatus") === "function")
+      callSafe("getRemotePlayStatus()", function () { return navigator.sce.getRemotePlayStatus(); });
+    if (typeOfPath("navigator.sce.isRemotePlaying") === "function")
+      callSafe("isRemotePlaying()", function () { return navigator.sce.isRemotePlaying(); });
+    if (typeOfPath("navigator.sce.hasNeoMode") === "function")
+      callSafe("hasNeoMode()", function () { return navigator.sce.hasNeoMode(); });
+    if (typeOfPath("navigator.sce.isLiveAreaFocused") === "function")
+      callSafe("isLiveAreaFocused()", function () { return navigator.sce.isLiveAreaFocused(); });
+    if (typeOfPath("navigator.sce.ime.GetDialogStatus") === "function")
+      callSafe("ime.GetDialogStatus()", function () { return navigator.sce.ime.GetDialogStatus(); });
+
+    if (typeOfPath("navigator.sce.postMessage") === "function") {
+      callSafe("postMessage small", function () {
+        return navigator.sce.postMessage(JSON.stringify({ probe: "small", t: Date.now() }));
+      });
+      callSafe("postMessage 128KiB boundary", function () {
+        return navigator.sce.postMessage("A".repeat(131072));
+      });
+      callSafe("postMessage 128KiB+1 boundary", function () {
+        return navigator.sce.postMessage("B".repeat(131073));
+      });
+    }
+
+    line("done", "warn");
+  }
+
+  document.getElementById("run").onclick = run;
+  run();
 })();
 </script>
 </body>
