@@ -1,253 +1,101 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PS4 WebKit Array Sinking Probe v2</title>
-  <style>
-    body { margin: 0; background: #0d1016; color: #edf3fb; font: 15px Arial, Helvetica, sans-serif; }
-    main { max-width: 980px; margin: 0 auto; padding: 22px; }
-    h1 { margin: 0 0 8px; font-size: 24px; }
-    p { color: #bfccdc; }
-    button { margin: 4px 6px 12px 0; padding: 10px 14px; border: 1px solid #4d5b70; border-radius: 6px; background: #1c2635; color: #fff; }
-    #status { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px; margin: 10px 0 14px; }
-    #status div { border: 1px solid #2a3548; border-radius: 6px; padding: 9px; background: #141a25; }
-    #status span { display: block; color: #90a0b6; font-size: 12px; }
-    #status b { display: block; font-size: 21px; margin-top: 3px; }
-    #log { min-height: 420px; overflow: auto; white-space: pre-wrap; padding: 12px; background: #07090d; border: 1px solid #2a3548; border-radius: 6px; font: 13px Consolas, "Courier New", monospace; }
-    .ok { color: #77df91; }
-    .bad { color: #ff7474; }
-    .warn { color: #ffd46b; }
-  </style>
-</head>
-<body>
-<main>
-  <h1>PS4 WebKit Array Sinking Probe v2</h1>
-  <p>Higher-pressure validation for the JSC array allocation sinking candidate. OK-only means no visible repro yet.</p>
-  <button id="start">Start v2</button>
-  <button id="stop" disabled>Stop</button>
-  <button id="clear">Clear</button>
-  <div id="status">
-    <div><span>State</span><b id="state">idle</b></div>
-    <div><span>Rounds</span><b id="rounds">0</b></div>
-    <div><span>Calls</span><b id="calls">0</b></div>
-    <div><span>Failures</span><b id="failures">0</b></div>
-  </div>
-  <pre id="log"></pre>
-</main>
+      }
+      tick();
+    `;
+  }
 
-<script>
-"use strict";
-
-(function () {
-  var running = false;
-  var round = 0;
-  var calls = 0;
-  var failures = 0;
-  var keep = [];
-
-  var stateEl = document.getElementById("state");
-  var roundsEl = document.getElementById("rounds");
-  var callsEl = document.getElementById("calls");
-  var failuresEl = document.getElementById("failures");
-  var logEl = document.getElementById("log");
-  var startEl = document.getElementById("start");
-  var stopEl = document.getElementById("stop");
-  var clearEl = document.getElementById("clear");
-
-  function sceLog(s) {
+  function startWorkers() {
+    if (!window.Worker || !window.Blob || !window.URL) {
+      log("workers unavailable in this browser context", "warn");
+      return;
+    }
     try {
-      if (navigator.sce && navigator.sce.log)
-        navigator.sce.log("[array-sink-v2] " + s);
-    } catch (e) { }
-  }
-
-  function log(s, cls) {
-    var line = document.createElement("div");
-    line.className = cls || "";
-    line.textContent = new Date().toISOString() + "  " + s;
-    logEl.appendChild(line);
-    logEl.scrollTop = logEl.scrollHeight;
-    sceLog(s);
-  }
-
-  function update(state) {
-    stateEl.textContent = state;
-    roundsEl.textContent = String(round);
-    callsEl.textContent = String(calls);
-    failuresEl.textContent = String(failures);
-  }
-
-  function die(name, got, want) {
-    failures++;
-    update("failure");
-    log(name + " BAD got=" + show(got) + " want=" + show(want), "bad");
-    throw new Error(name + " BAD");
-  }
-
-  function show(v) {
-    if (v === undefined) return "undefined";
-    if (v === null) return "null";
-    if (typeof v === "object") {
-      try { return JSON.stringify(v); } catch (e) { return Object.prototype.toString.call(v); }
-    }
-    return String(v);
-  }
-
-  function same(name, got, want) {
-    if (got !== want)
-      die(name, got, want);
-  }
-
-  function mkObj(i) {
-    switch (i & 7) {
-    case 0: return { foo: 1, 1: 1 };
-    case 1: return { foo: 1.1, 1: 1.4, extra: i };
-    case 2: return { foo: { x: i }, 1: { y: i } };
-    case 3: return Object.create({ foo: 1, 1: 2 });
-    case 4: return { get foo() { return 1; }, 1: i };
-    case 5: return { foo: i | 0, 1: "s" + i };
-    case 6: return { foo: -0, 1: NaN };
-    default: return { foo: true, 1: false };
+      var blob = new Blob([workerSource()], { type: "application/javascript" });
+      var url = URL.createObjectURL(blob);
+      for (var i = 0; i < 2; ++i) {
+        var w = new Worker(url);
+        w.onmessage = function (event) {
+          workerMsgs++;
+          if (event.data && event.data.type === "bad") {
+            failures++;
+            log("worker BAD " + event.data.name + " got=" + event.data.got + " calls=" + event.data.calls, "bad");
+          } else if ((workerMsgs & 15) === 0)
+            log("worker ok messages=" + workerMsgs, "ok");
+          update(running ? "running" : "stopped");
+        };
+        w.onerror = function (event) {
+          failures++;
+          log("worker exception " + event.message + " line=" + event.lineno, "bad");
+          update("failure");
+        };
+        workers.push(w);
+      }
+      log("started " + workers.length + " workers", "ok");
+    } catch (e) {
+      log("worker startup failed: " + e, "warn");
     }
   }
 
-  function conditionalSlot(flag, value) {
-    var a = new Array(4);
-    if (flag)
-      a[0] = value;
-    return a[0];
-  }
-
-  function diamondSlot(flag, obj) {
-    var a = new Array(4);
-    if (flag)
-      a[0] = obj.foo;
-    else
-      a[0] = 1;
-    return a[0];
-  }
-
-  function readUninitializedAfterWrite(obj, index) {
-    var a = new Array(8);
-    a[0] = obj[index];
-    a[2] = index;
-    return a[1];
-  }
-
-  function branchMerge(flag, x) {
-    var a = new Array(8);
-    if (flag) {
-      a[0] = x;
-      a[3] = 7;
-    } else {
-      a[0] = x;
-      a[4] = 9;
+  function stopWorkers() {
+    for (var i = 0; i < workers.length; ++i) {
+      try { workers[i].postMessage("stop"); workers[i].terminate(); } catch (e) { }
     }
-    return a[3];
-  }
-
-  function objectEscape(flag, x) {
-    var a = new Array(6);
-    if (flag)
-      a[1] = { v: x };
-    var o = { p: a[1], q: a[2] };
-    return o.q;
-  }
-
-  function polymorphicRead(flag, obj) {
-    var a = new Array(5);
-    if (flag)
-      a[0] = obj.foo;
-    else
-      a[0] = obj[1];
-    return a[1];
-  }
-
-  function heapPressure(i) {
-    var arr = [];
-    for (var j = 0; j < 2500; ++j)
-      arr[j] = { j: j, i: i, s: "pressure-" + i + "-" + j };
-    keep.push(arr);
-    if (keep.length > 12)
-      keep.shift();
-  }
-
-  function exercise(i) {
-    var obj = mkObj(i);
-    var flag = !!(i & 1);
-
-    same("conditional false", conditionalSlot(false, i), undefined);
-    same("conditional true int", conditionalSlot(true, 42), 42);
-    same("conditional true double", conditionalSlot(true, 42.5), 42.5);
-
-    var cell = conditionalSlot(true, obj);
-    if (cell !== obj)
-      die("conditional true object", cell, obj);
-
-    if (flag)
-      same("diamond true", diamondSlot(true, { foo: 1 }), 1);
-    else
-      same("diamond false", diamondSlot(false, obj), 1);
-
-    same("read uninitialized 1", readUninitializedAfterWrite(obj, 1), undefined);
-    same("read uninitialized 2", readUninitializedAfterWrite(obj, "foo"), undefined);
-    same("branch merge true", branchMerge(true, obj), 7);
-    same("branch merge false", branchMerge(false, obj), undefined);
-    same("object escape false", objectEscape(false, i), undefined);
-    same("object escape true", objectEscape(true, i), undefined);
-    same("polymorphic read", polymorphicRead(flag, obj), undefined);
-
-    if ((i & 255) === 0)
-      heapPressure(i);
-    calls++;
+    workers = [];
   }
 
   function chunk() {
     if (!running)
       return;
     try {
-      for (var i = 0; i < 12000; ++i)
-        exercise((round * 12000) + i);
+      for (var i = 0; i < 25000; ++i)
+        exercise(round * 25000 + i);
       round++;
       update("running");
-      log("round " + round + " ok, calls " + calls, "ok");
+      log("main round " + round + " ok, calls " + calls, "ok");
       setTimeout(chunk, 0);
     } catch (e) {
-      running = false;
-      startEl.disabled = false;
-      stopEl.disabled = true;
       failures++;
+      running = false;
+      stopWorkers();
       update("stopped");
-      log("exception: " + (e && e.stack ? e.stack : e), "bad");
+      log("main exception: " + (e && e.stack ? e.stack : e), "bad");
     }
   }
 
-  startEl.onclick = function () {
+  function start() {
     if (running)
       return;
     running = true;
-    startEl.disabled = true;
-    stopEl.disabled = false;
-    update("running");
-    log("started v2; leave it running and watch for BAD/crash/reload", "warn");
-    setTimeout(chunk, 0);
-  };
+    update("warming");
+    log("starting v3; this version auto-warms hot functions first", "warn");
+    setTimeout(function () {
+      try {
+        warm();
+        update("running");
+        startWorkers();
+        chunk();
+      } catch (e) {
+        failures++;
+        running = false;
+        update("stopped");
+        log("warmup exception: " + (e && e.stack ? e.stack : e), "bad");
+      }
+    }, 0);
+  }
 
-  stopEl.onclick = function () {
+  document.getElementById("start").onclick = start;
+  document.getElementById("stop").onclick = function () {
     running = false;
-    startEl.disabled = false;
-    stopEl.disabled = true;
+    stopWorkers();
     update("stopped");
     log("stopped", "warn");
   };
-
-  clearEl.onclick = function () {
+  document.getElementById("clear").onclick = function () {
     logEl.textContent = "";
   };
 
   update("idle");
-  log("ready", "warn");
+  log("ready; auto-starting in 1 second", "warn");
+  setTimeout(start, 1000);
 })();
 </script>
 </body>
