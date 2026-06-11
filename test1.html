@@ -1,141 +1,124 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PS4 navigator.sce Surface Probe</title>
-  <style>
-    body { margin: 0; background: #101216; color: #edf3fb; font: 15px Arial, Helvetica, sans-serif; }
-    main { max-width: 980px; margin: 0 auto; padding: 20px; }
-    button { padding: 10px 14px; border: 1px solid #4f5f75; border-radius: 6px; background: #1b2636; color: #fff; }
-    pre { min-height: 430px; white-space: pre-wrap; overflow: auto; padding: 12px; border: 1px solid #283448; border-radius: 6px; background: #07090d; font: 13px Consolas, "Courier New", monospace; }
-    .ok { color: #78e08e; }
-    .bad { color: #ff7474; }
-    .warn { color: #ffd36c; }
-  </style>
-</head>
-<body>
-<main>
-  <h1>navigator.sce Surface Probe</h1>
-  <p>Non-destructive probe. It lists exposed PS4 browser native APIs and lightly tests safe getters/limits.</p>
-  <button id="run">Run Probe</button>
-  <pre id="log"></pre>
-</main>
-<script>
-"use strict";
-
-(function () {
-  var logEl = document.getElementById("log");
-
-  function line(s, cls) {
-    var div = document.createElement("div");
-    div.className = cls || "";
-    div.textContent = new Date().toISOString() + "  " + s;
-    logEl.appendChild(div);
-    logEl.scrollTop = logEl.scrollHeight;
-    try {
-      if (navigator.sce && navigator.sce.log)
-        navigator.sce.log("[surface-probe] " + s);
-    } catch (e) { }
-  }
-
-  function typeOfPath(path) {
-    var parts = path.split(".");
-    var obj = window;
-    for (var i = 0; i < parts.length; ++i) {
-      if (!obj || !(parts[i] in obj))
-        return "missing";
-      obj = obj[parts[i]];
+    case 2: return { a: { i: i }, b: [i] };
+    case 3: return Object.create({ a: 7, b: 8 });
+    case 4: return new Proxy({ a: i, b: i + 2 }, { get: function (t, k) { return t[k]; } });
+    default: return { a: "a" + i, b: "b" + i };
     }
-    return typeof obj;
   }
 
-  function getPath(path) {
-    var parts = path.split(".");
-    var obj = window;
-    for (var i = 0; i < parts.length; ++i)
-      obj = obj[parts[i]];
-    return obj;
+  function jscProbeOne(i) {
+    var o = jscShape(i);
+    var arr = new Array(6);
+    if (i & 1)
+      arr[0] = o.a;
+    else
+      arr[1] = o.b;
+    if (arr[3] !== undefined)
+      fail("array hole", arr[3], undefined);
+
+    var spread = [1, 2, 3, ...[4, 5]];
+    if (spread.length !== 5)
+      fail("spread length", spread.length, 5);
+
+    var ta = new Uint32Array(32);
+    ta[(i * 17) & 31] = i;
+    if (ta.length !== 32)
+      fail("typed array length", ta.length, 32);
+
+    var text = "x".repeat((i & 255) + 1);
+    if (text.length < 1)
+      fail("string repeat", text.length, "positive");
+
+    if ((i & 511) === 0) {
+      var junk = [];
+      for (var j = 0; j < 1200; ++j)
+        junk.push({ j: j, s: "gc-" + i + "-" + j });
+      roots.push(junk);
+      if (roots.length > 10)
+        roots.shift();
+    }
+    jscCalls++;
   }
 
-  function callSafe(name, fn) {
+  function makeGL() {
+    var canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 256;
+    return canvas.getContext("webgl2") || canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+  }
+
+  function glProbe(gl, i) {
+    if (!gl)
+      return;
+    var size = 16 + (i & 127);
+    var data = new Uint8Array(size * size * 4);
+    for (var j = 0; j < data.length; j += 4) {
+      data[j] = i & 255;
+      data[j + 1] = j & 255;
+      data[j + 2] = (i + j) & 255;
+      data[j + 3] = 255;
+    }
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    var err = gl.getError();
+    gl.deleteTexture(tex);
+    if (err !== gl.NO_ERROR && err !== gl.INVALID_OPERATION)
+      log("WebGL unusual error 0x" + err.toString(16), "warn");
+    glCalls++;
+  }
+
+  function tick(gl) {
+    if (!running)
+      return;
     try {
-      var value = fn();
-      line(name + " => " + String(value), "ok");
+      var start = Date.now();
+      while (Date.now() - start < 70) {
+        for (var i = 0; i < 200; ++i)
+          jscProbeOne(jscCalls + i);
+        glProbe(gl, glCalls);
+      }
+      update("running");
+      if ((jscCalls % 10000) < 200)
+        log("ok jsc=" + jscCalls + " webgl=" + glCalls, "ok");
+      if (Date.now() > deadline) {
+        running = false;
+        update("done");
+        log("3-minute triage completed with no visible crash/mismatch", "ok");
+        return;
+      }
+      setTimeout(function () { tick(gl); }, 0);
     } catch (e) {
-      line(name + " threw: " + (e && e.message ? e.message : e), "warn");
+      failures++;
+      running = false;
+      update("stopped");
+      log("exception: " + (e && e.stack ? e.stack : e), "bad");
     }
   }
 
-  function run() {
+  document.getElementById("run").onclick = function () {
+    running = true;
+    deadline = Date.now() + 180000;
+    update("running");
+    log("starting 3-minute generic triage", "warn");
+    fingerprint();
+    tick(makeGL());
+  };
+
+  document.getElementById("stop").onclick = function () {
+    running = false;
+    update("stopped");
+    log("stopped", "warn");
+  };
+
+  document.getElementById("clear").onclick = function () {
     logEl.textContent = "";
-    line("starting navigator.sce surface probe", "warn");
+  };
 
-    var paths = [
-      "navigator.sce",
-      "navigator.sce.log",
-      "navigator.sce.postMessage",
-      "navigator.sce.sendMessage",
-      "navigator.sce.getNetworkTime",
-      "navigator.sce.getDebugNetworkTime",
-      "navigator.sce.getEventFakeTime",
-      "navigator.sce.getAdTime",
-      "navigator.sce.getRemotePlayStatus",
-      "navigator.sce.isRemotePlaying",
-      "navigator.sce.readRegistries",
-      "navigator.sce.isLiveAreaFocused",
-      "navigator.sce.isThemeBgExist",
-      "navigator.sce.hasNeoMode",
-      "navigator.sce.getImageByBase64",
-      "navigator.sce.isVideoOutCapability",
-      "navigator.sce.getSupportedHdcpVersion",
-      "navigator.sce.ime",
-      "navigator.sce.ime.OpenDialog",
-      "navigator.sce.ime.GetDialogStatus",
-      "navigator.sce.ime.GetDialogResult",
-      "navigator.sce.jit",
-      "navigator.sce.jit.togglejit",
-      "navigator.sce.jit.enableJit",
-      "navigator.sce.performance",
-      "navigator.sce.performance.clear",
-      "navigator.sce.performance.memoryCache",
-      "navigator.sce.performance.garbageCollect",
-      "navigator.sce.performance.restartProcess"
-    ];
-
-    for (var i = 0; i < paths.length; ++i)
-      line(paths[i] + " : " + typeOfPath(paths[i]), typeOfPath(paths[i]) === "missing" ? "bad" : "ok");
-
-    if (typeOfPath("navigator.sce.getNetworkTime") === "function")
-      callSafe("getNetworkTime()", function () { return navigator.sce.getNetworkTime(); });
-    if (typeOfPath("navigator.sce.getRemotePlayStatus") === "function")
-      callSafe("getRemotePlayStatus()", function () { return navigator.sce.getRemotePlayStatus(); });
-    if (typeOfPath("navigator.sce.isRemotePlaying") === "function")
-      callSafe("isRemotePlaying()", function () { return navigator.sce.isRemotePlaying(); });
-    if (typeOfPath("navigator.sce.hasNeoMode") === "function")
-      callSafe("hasNeoMode()", function () { return navigator.sce.hasNeoMode(); });
-    if (typeOfPath("navigator.sce.isLiveAreaFocused") === "function")
-      callSafe("isLiveAreaFocused()", function () { return navigator.sce.isLiveAreaFocused(); });
-    if (typeOfPath("navigator.sce.ime.GetDialogStatus") === "function")
-      callSafe("ime.GetDialogStatus()", function () { return navigator.sce.ime.GetDialogStatus(); });
-
-    if (typeOfPath("navigator.sce.postMessage") === "function") {
-      callSafe("postMessage small", function () {
-        return navigator.sce.postMessage(JSON.stringify({ probe: "small", t: Date.now() }));
-      });
-      callSafe("postMessage 128KiB boundary", function () {
-        return navigator.sce.postMessage("A".repeat(131072));
-      });
-      callSafe("postMessage 128KiB+1 boundary", function () {
-        return navigator.sce.postMessage("B".repeat(131073));
-      });
-    }
-
-    line("done", "warn");
-  }
-
-  document.getElementById("run").onclick = run;
-  run();
+  fingerprint();
+  update("idle");
 })();
 </script>
 </body>
