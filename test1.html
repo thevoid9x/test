@@ -1,225 +1,88 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PS4 WebKit Fast Generic Triage</title>
-  <style>
-    body { margin: 0; background: #0b0e14; color: #eef3fb; font: 15px Arial, Helvetica, sans-serif; }
-    main { max-width: 1040px; margin: 0 auto; padding: 20px; }
-    button { margin: 4px 8px 12px 0; padding: 10px 14px; border: 1px solid #506077; border-radius: 6px; background: #1b2636; color: #fff; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 8px; margin: 10px 0 14px; }
-    .box { border: 1px solid #283448; border-radius: 6px; background: #111923; padding: 9px; }
-    .box span { display: block; color: #8fa0b7; font-size: 12px; }
-    .box b { display: block; font-size: 20px; margin-top: 3px; }
-    pre { min-height: 440px; white-space: pre-wrap; overflow: auto; padding: 12px; border: 1px solid #283448; border-radius: 6px; background: #05070a; font: 13px Consolas, "Courier New", monospace; }
-    .ok { color: #78e08e; }
-    .warn { color: #ffd36c; }
-    .bad { color: #ff7474; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PS4 WebKit Fast Auto Probe</title>
+<style>
+body{margin:0;background:#080b10;color:#eef4fb;font:18px Arial,sans-serif}
+main{padding:18px;max-width:980px;margin:auto}
+h1{font-size:26px;margin:0 0 8px}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.box{background:#141b26;border:1px solid #334158;border-radius:6px;padding:10px;min-width:130px}
+.box span{display:block;color:#9badc3;font-size:12px}.box b{font-size:24px}
+#log{white-space:pre-wrap;background:#05070a;border:1px solid #334158;border-radius:6px;padding:12px;min-height:360px;font:14px Consolas,monospace;overflow:auto}
+.ok{color:#78e08e}.bad{color:#ff7474}.warn{color:#ffd36c}
+button{font-size:18px;padding:10px 14px;margin:4px;background:#1b2636;color:white;border:1px solid #506077;border-radius:6px}
+</style>
 </head>
 <body>
 <main>
-  <h1>PS4 WebKit Fast Generic Triage</h1>
-  <p>Use this when PS4-only <code>navigator.sce</code> APIs are missing. It fingerprints generic WebKit surfaces and runs short, safe probes.</p>
-  <button id="run">Run 3-minute triage</button>
-  <button id="stop">Stop</button>
-  <button id="clear">Clear</button>
-  <div class="grid">
-    <div class="box"><span>State</span><b id="state">idle</b></div>
-    <div class="box"><span>JSC Calls</span><b id="jscCalls">0</b></div>
-    <div class="box"><span>WebGL Calls</span><b id="glCalls">0</b></div>
-    <div class="box"><span>Failures</span><b id="failures">0</b></div>
-  </div>
-  <pre id="log"></pre>
+<h1>PS4 WebKit Fast Auto Probe</h1>
+<p>This page auto-runs. Refresh after each edit. Watch for BAD, exception, reload, freeze, or crash.</p>
+<button onclick="start()">Start</button><button onclick="stop()">Stop</button><button onclick="clearLog()">Clear</button>
+<div class="row">
+<div class="box"><span>STATE</span><b id="state">boot</b></div>
+<div class="box"><span>CALLS</span><b id="calls">0</b></div>
+<div class="box"><span>GL</span><b id="glcalls">0</b></div>
+<div class="box"><span>FAIL</span><b id="fail">0</b></div>
+</div>
+<div id="log"></div>
 </main>
-
 <script>
-"use strict";
-
-(function () {
-  var running = false;
-  var deadline = 0;
-  var jscCalls = 0;
-  var glCalls = 0;
-  var failures = 0;
-  var roots = [];
-
-  var stateEl = document.getElementById("state");
-  var jscEl = document.getElementById("jscCalls");
-  var glEl = document.getElementById("glCalls");
-  var failuresEl = document.getElementById("failures");
-  var logEl = document.getElementById("log");
-
-  function log(s, cls) {
-    var div = document.createElement("div");
-    div.className = cls || "";
-    div.textContent = new Date().toISOString() + "  " + s;
-    logEl.appendChild(div);
-    logEl.scrollTop = logEl.scrollHeight;
-  }
-
-  function update(state) {
-    stateEl.textContent = state;
-    jscEl.textContent = String(jscCalls);
-    glEl.textContent = String(glCalls);
-    failuresEl.textContent = String(failures);
-  }
-
-  function feature(name, value) {
-    log(name + ": " + value, value ? "ok" : "warn");
-  }
-
-  function fingerprint() {
-    log("userAgent: " + navigator.userAgent, "warn");
-    feature("Worker", !!window.Worker);
-    feature("SharedArrayBuffer", !!window.SharedArrayBuffer);
-    feature("WebAssembly", !!window.WebAssembly);
-    feature("OffscreenCanvas", !!window.OffscreenCanvas);
-    feature("WebGLRenderingContext", !!window.WebGLRenderingContext);
-    feature("WebGL2RenderingContext", !!window.WebGL2RenderingContext);
-    feature("WebGPU navigator.gpu", !!navigator.gpu);
-    feature("VideoDecoder", !!window.VideoDecoder);
-    feature("AudioWorklet", !!(window.AudioContext && AudioContext.prototype.audioWorklet));
-    feature("ReadableStream", !!window.ReadableStream);
-    feature("CompressionStream", !!window.CompressionStream);
-    feature("Intl.DurationFormat", !!(Intl && Intl.DurationFormat));
-    feature("ArrayBuffer.resize", !!(ArrayBuffer.prototype && ArrayBuffer.prototype.resize));
-  }
-
-  function fail(name, got, want) {
-    failures++;
-    update("failure");
-    log(name + " BAD got=" + String(got) + " want=" + String(want), "bad");
-    throw new Error(name);
-  }
-
-  function jscShape(i) {
-    switch (i & 7) {
-    case 0: return { a: i, b: i + 1 };
-    case 1: return { a: i + 0.5, b: -i };
-    case 2: return { a: { i: i }, b: [i] };
-    case 3: return Object.create({ a: 7, b: 8 });
-    case 4: return new Proxy({ a: i, b: i + 2 }, { get: function (t, k) { return t[k]; } });
-    default: return { a: "a" + i, b: "b" + i };
-    }
-  }
-
-  function jscProbeOne(i) {
-    var o = jscShape(i);
-    var arr = new Array(6);
-    if (i & 1)
-      arr[0] = o.a;
-    else
-      arr[1] = o.b;
-    if (arr[3] !== undefined)
-      fail("array hole", arr[3], undefined);
-
-    var spread = [1, 2, 3, ...[4, 5]];
-    if (spread.length !== 5)
-      fail("spread length", spread.length, 5);
-
-    var ta = new Uint32Array(32);
-    ta[(i * 17) & 31] = i;
-    if (ta.length !== 32)
-      fail("typed array length", ta.length, 32);
-
-    var text = "x".repeat((i & 255) + 1);
-    if (text.length < 1)
-      fail("string repeat", text.length, "positive");
-
-    if ((i & 511) === 0) {
-      var junk = [];
-      for (var j = 0; j < 1200; ++j)
-        junk.push({ j: j, s: "gc-" + i + "-" + j });
-      roots.push(junk);
-      if (roots.length > 10)
-        roots.shift();
-    }
-    jscCalls++;
-  }
-
-  function makeGL() {
-    var canvas = document.createElement("canvas");
-    canvas.width = 256;
-    canvas.height = 256;
-    return canvas.getContext("webgl2") || canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
-  }
-
-  function glProbe(gl, i) {
-    if (!gl)
-      return;
-    var size = 16 + (i & 127);
-    var data = new Uint8Array(size * size * 4);
-    for (var j = 0; j < data.length; j += 4) {
-      data[j] = i & 255;
-      data[j + 1] = j & 255;
-      data[j + 2] = (i + j) & 255;
-      data[j + 3] = 255;
-    }
-    var tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
-    gl.generateMipmap(gl.TEXTURE_2D);
-    var err = gl.getError();
-    gl.deleteTexture(tex);
-    if (err !== gl.NO_ERROR && err !== gl.INVALID_OPERATION)
-      log("WebGL unusual error 0x" + err.toString(16), "warn");
-    glCalls++;
-  }
-
-  function tick(gl) {
-    if (!running)
-      return;
-    try {
-      var start = Date.now();
-      while (Date.now() - start < 70) {
-        for (var i = 0; i < 200; ++i)
-          jscProbeOne(jscCalls + i);
-        glProbe(gl, glCalls);
-      }
-      update("running");
-      if ((jscCalls % 10000) < 200)
-        log("ok jsc=" + jscCalls + " webgl=" + glCalls, "ok");
-      if (Date.now() > deadline) {
-        running = false;
-        update("done");
-        log("3-minute triage completed with no visible crash/mismatch", "ok");
-        return;
-      }
-      setTimeout(function () { tick(gl); }, 0);
-    } catch (e) {
-      failures++;
-      running = false;
-      update("stopped");
-      log("exception: " + (e && e.stack ? e.stack : e), "bad");
-    }
-  }
-
-  document.getElementById("run").onclick = function () {
-    running = true;
-    deadline = Date.now() + 180000;
-    update("running");
-    log("starting 3-minute generic triage", "warn");
-    fingerprint();
-    tick(makeGL());
-  };
-
-  document.getElementById("stop").onclick = function () {
-    running = false;
-    update("stopped");
-    log("stopped", "warn");
-  };
-
-  document.getElementById("clear").onclick = function () {
-    logEl.textContent = "";
-  };
-
-  fingerprint();
-  update("idle");
-})();
+var running=false,calls=0,glcalls=0,failures=0,roots=[],gl=null;
+function byId(x){return document.getElementById(x)}
+function setState(s){byId("state").textContent=s;byId("calls").textContent=String(calls);byId("glcalls").textContent=String(glcalls);byId("fail").textContent=String(failures)}
+function log(s,c){var d=document.createElement("div");d.className=c||"";d.textContent=(new Date()).toISOString()+"  "+s;byId("log").appendChild(d);byId("log").scrollTop=999999}
+function clearLog(){byId("log").innerHTML=""}
+window.onerror=function(m,u,l,col,e){failures++;setState("error");log("GLOBAL ERROR: "+m+" line="+l+" col="+col,"bad");if(e&&e.stack)log(e.stack,"bad")}
+function feature(n,v){log(n+": "+(v?"yes":"no"),v?"ok":"warn")}
+function fingerprint(){
+ log("UA: "+navigator.userAgent,"warn");
+ feature("Worker",typeof Worker!="undefined");
+ feature("WebAssembly",typeof WebAssembly!="undefined");
+ feature("WebGL",typeof WebGLRenderingContext!="undefined");
+ feature("WebGL2",typeof WebGL2RenderingContext!="undefined");
+ feature("SharedArrayBuffer",typeof SharedArrayBuffer!="undefined");
+ feature("ArrayBuffer.resize",!!(window.ArrayBuffer&&ArrayBuffer.prototype&&ArrayBuffer.prototype.resize));
+}
+function bad(n,g,w){failures++;setState("bad");log("BAD "+n+" got="+String(g)+" want="+String(w),"bad");throw new Error(n)}
+function shape(i){var r=i&7;if(r==0)return{a:i,b:i+1};if(r==1)return{a:i+0.5,b:-i};if(r==2)return{a:{i:i},b:[i]};if(r==3)return Object.create({a:7,b:8});return{a:"a"+i,b:"b"+i}}
+function jsc(i){
+ var o=shape(i),a=new Array(8);
+ if(i&1)a[0]=o.a;else a[1]=o.b;
+ if(a[3]!==void 0)bad("array-hole",a[3],"undefined");
+ var b=[1,2,3].concat([4,5]);if(b.length!==5)bad("concat",b.length,5);
+ var t=new Uint32Array(64);t[(i*17)&63]=i;if(t.length!==64)bad("typed-length",t.length,64);
+ var s=("x").repeat?("x").repeat((i&127)+1):new Array((i&127)+2).join("x");if(s.length<1)bad("string",s.length,">0");
+ if((i&255)===0){var junk=[];for(var k=0;k<900;k++)junk.push({k:k,s:"g"+i+"-"+k});roots.push(junk);if(roots.length>8)roots.shift()}
+ calls++;
+}
+function makeGL(){try{var c=document.createElement("canvas");c.width=128;c.height=128;return c.getContext("webgl2")||c.getContext("webgl")||c.getContext("experimental-webgl")}catch(e){log("GL init threw "+e,"warn");return null}}
+function gltest(i){
+ if(!gl)return;
+ var sz=16+(i&63),data=new Uint8Array(sz*sz*4);
+ for(var p=0;p<data.length;p+=4){data[p]=i&255;data[p+1]=p&255;data[p+2]=(i+p)&255;data[p+3]=255}
+ var tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);
+ gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+ gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,sz,sz,0,gl.RGBA,gl.UNSIGNED_BYTE,data);
+ gl.generateMipmap(gl.TEXTURE_2D);var e=gl.getError();gl.deleteTexture(tex);
+ if(e!==gl.NO_ERROR&&e!==gl.INVALID_OPERATION)log("GL unusual error 0x"+e.toString(16),"warn");
+ glcalls++;
+}
+function tick(){
+ if(!running)return;
+ try{
+  var start=Date.now();
+  while(Date.now()-start<80){for(var i=0;i<250;i++)jsc(calls+i);gltest(glcalls)}
+  setState("running");
+  if((calls%10000)<250)log("ALIVE ok calls="+calls+" gl="+glcalls,"ok");
+  setTimeout(tick,0);
+ }catch(e){failures++;running=false;setState("stopped");log("EXCEPTION "+(e&&e.stack?e.stack:e),"bad")}
+}
+function start(){if(running)return;running=true;setState("running");log("START auto probe","warn");gl=makeGL();tick()}
+function stop(){running=false;setState("stopped");log("STOP","warn")}
+fingerprint();setState("ready");log("AUTO START in 1 second","warn");setTimeout(start,1000);
 </script>
 </body>
 </html>
