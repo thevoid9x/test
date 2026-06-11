@@ -3,86 +3,57 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PS4 WebKit Fast Auto Probe</title>
+<title>PS4 WebKit Pure JSC v4</title>
 <style>
-body{margin:0;background:#080b10;color:#eef4fb;font:18px Arial,sans-serif}
-main{padding:18px;max-width:980px;margin:auto}
+body{margin:0;background:#070a10;color:#eef4fb;font:18px Arial,sans-serif}
+main{max-width:980px;margin:auto;padding:18px}
 h1{font-size:26px;margin:0 0 8px}
 .row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
-.box{background:#141b26;border:1px solid #334158;border-radius:6px;padding:10px;min-width:130px}
+.box{background:#121a25;border:1px solid #334158;border-radius:6px;padding:10px;min-width:135px}
 .box span{display:block;color:#9badc3;font-size:12px}.box b{font-size:24px}
-#log{white-space:pre-wrap;background:#05070a;border:1px solid #334158;border-radius:6px;padding:12px;min-height:360px;font:14px Consolas,monospace;overflow:auto}
+#log{white-space:pre-wrap;background:#030509;border:1px solid #334158;border-radius:6px;padding:12px;min-height:390px;font:14px Consolas,monospace;overflow:auto}
 .ok{color:#78e08e}.bad{color:#ff7474}.warn{color:#ffd36c}
 button{font-size:18px;padding:10px 14px;margin:4px;background:#1b2636;color:white;border:1px solid #506077;border-radius:6px}
 </style>
 </head>
 <body>
 <main>
-<h1>PS4 WebKit Fast Auto Probe</h1>
-<p>This page auto-runs. Refresh after each edit. Watch for BAD, exception, reload, freeze, or crash.</p>
+<h1>PS4 WebKit Pure JSC v4</h1>
+<p>Auto-runs pure JavaScriptCore probes. No WebGL. No PS4 native APIs. Refresh after each edit.</p>
 <button onclick="start()">Start</button><button onclick="stop()">Stop</button><button onclick="clearLog()">Clear</button>
 <div class="row">
 <div class="box"><span>STATE</span><b id="state">boot</b></div>
 <div class="box"><span>CALLS</span><b id="calls">0</b></div>
-<div class="box"><span>GL</span><b id="glcalls">0</b></div>
+<div class="box"><span>ROUND</span><b id="round">0</b></div>
 <div class="box"><span>FAIL</span><b id="fail">0</b></div>
 </div>
 <div id="log"></div>
 </main>
 <script>
-var running=false,calls=0,glcalls=0,failures=0,roots=[],gl=null;
-function byId(x){return document.getElementById(x)}
-function setState(s){byId("state").textContent=s;byId("calls").textContent=String(calls);byId("glcalls").textContent=String(glcalls);byId("fail").textContent=String(failures)}
-function log(s,c){var d=document.createElement("div");d.className=c||"";d.textContent=(new Date()).toISOString()+"  "+s;byId("log").appendChild(d);byId("log").scrollTop=999999}
-function clearLog(){byId("log").innerHTML=""}
-window.onerror=function(m,u,l,col,e){failures++;setState("error");log("GLOBAL ERROR: "+m+" line="+l+" col="+col,"bad");if(e&&e.stack)log(e.stack,"bad")}
-function feature(n,v){log(n+": "+(v?"yes":"no"),v?"ok":"warn")}
-function fingerprint(){
- log("UA: "+navigator.userAgent,"warn");
- feature("Worker",typeof Worker!="undefined");
- feature("WebAssembly",typeof WebAssembly!="undefined");
- feature("WebGL",typeof WebGLRenderingContext!="undefined");
- feature("WebGL2",typeof WebGL2RenderingContext!="undefined");
- feature("SharedArrayBuffer",typeof SharedArrayBuffer!="undefined");
- feature("ArrayBuffer.resize",!!(window.ArrayBuffer&&ArrayBuffer.prototype&&ArrayBuffer.prototype.resize));
-}
+var running=false,calls=0,round=0,failures=0,roots=[],deadline=0;
+function id(x){return document.getElementById(x)}
+function setState(s){id("state").textContent=s;id("calls").textContent=String(calls);id("round").textContent=String(round);id("fail").textContent=String(failures)}
+function log(s,c){var d=document.createElement("div");d.className=c||"";d.textContent=(new Date()).toISOString()+"  "+s;id("log").appendChild(d);id("log").scrollTop=999999}
+function clearLog(){id("log").innerHTML=""}
+window.onerror=function(m,u,l,col,e){failures++;setState("error");log("GLOBAL ERROR "+m+" line="+l+" col="+col,"bad");if(e&&e.stack)log(e.stack,"bad")}
 function bad(n,g,w){failures++;setState("bad");log("BAD "+n+" got="+String(g)+" want="+String(w),"bad");throw new Error(n)}
-function shape(i){var r=i&7;if(r==0)return{a:i,b:i+1};if(r==1)return{a:i+0.5,b:-i};if(r==2)return{a:{i:i},b:[i]};if(r==3)return Object.create({a:7,b:8});return{a:"a"+i,b:"b"+i}}
-function jsc(i){
- var o=shape(i),a=new Array(8);
- if(i&1)a[0]=o.a;else a[1]=o.b;
- if(a[3]!==void 0)bad("array-hole",a[3],"undefined");
- var b=[1,2,3].concat([4,5]);if(b.length!==5)bad("concat",b.length,5);
- var t=new Uint32Array(64);t[(i*17)&63]=i;if(t.length!==64)bad("typed-length",t.length,64);
- var s=("x").repeat?("x").repeat((i&127)+1):new Array((i&127)+2).join("x");if(s.length<1)bad("string",s.length,">0");
- if((i&255)===0){var junk=[];for(var k=0;k<900;k++)junk.push({k:k,s:"g"+i+"-"+k});roots.push(junk);if(roots.length>8)roots.shift()}
- calls++;
-}
-function makeGL(){try{var c=document.createElement("canvas");c.width=128;c.height=128;return c.getContext("webgl2")||c.getContext("webgl")||c.getContext("experimental-webgl")}catch(e){log("GL init threw "+e,"warn");return null}}
-function gltest(i){
- if(!gl)return;
- var sz=16+(i&63),data=new Uint8Array(sz*sz*4);
- for(var p=0;p<data.length;p+=4){data[p]=i&255;data[p+1]=p&255;data[p+2]=(i+p)&255;data[p+3]=255}
- var tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);
- gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
- gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,sz,sz,0,gl.RGBA,gl.UNSIGNED_BYTE,data);
- gl.generateMipmap(gl.TEXTURE_2D);var e=gl.getError();gl.deleteTexture(tex);
- if(e!==gl.NO_ERROR&&e!==gl.INVALID_OPERATION)log("GL unusual error 0x"+e.toString(16),"warn");
- glcalls++;
-}
-function tick(){
- if(!running)return;
- try{
-  var start=Date.now();
-  while(Date.now()-start<80){for(var i=0;i<250;i++)jsc(calls+i);gltest(glcalls)}
-  setState("running");
-  if((calls%10000)<250)log("ALIVE ok calls="+calls+" gl="+glcalls,"ok");
-  setTimeout(tick,0);
- }catch(e){failures++;running=false;setState("stopped");log("EXCEPTION "+(e&&e.stack?e.stack:e),"bad")}
-}
-function start(){if(running)return;running=true;setState("running");log("START auto probe","warn");gl=makeGL();tick()}
+function eq(n,g,w){if(g!==w)bad(n,g,w)}
+function isU(n,g){if(g!==void 0)bad(n,g,"undefined")}
+function obj(i){var r=i&15;if(r===0)return{a:i,b:i+1,c:i+2};if(r===1)return{a:i+0.25,b:-i,c:13.37};if(r===2)return{a:{x:i},b:[i],c:null};return{a:i|0,b:(i*1.1),c:!!(i&1)}}
+function arraySink(i){var o=obj(i),a=new Array(8);if(i&1){a[0]=o.a;a[2]=o.b}else{a[1]=o.c}isU("arraySink hole",a[3]);return a[0]}
+function branchMerge(i){var o=obj(i),a=new Array(12);if(i&1){a[0]=o.a;a[5]=5}else{a[1]=o.b;a[6]=6}if(i&1)eq("branch true",a[5],5);else isU("branch false hole",a[5]);return a[7]}
+function typedArray(i){var n=128+(i&127),u=new Uint32Array(n);u[(i*13)%n]=i;eq("typed len",u.length,n);var b=new Uint8Array(u.buffer);b[(i*7)%b.length]^=0xaa;eq("buffer len",b.buffer.byteLength,n*4);return b[0]}
+function regexpProbe(i){var s="aaabbbbcccc"+i+"zz";var m=/a+(b+)(c+)/.exec(s);if(!m||m[1].length!==4||m[2].length!==4)bad("regexp basic",m&&m[0],"match")}
+function stringProbe(i){var s="x";for(var k=0;k<8;k++)s+=s;eq("string len",s.length,256);var t=s.slice(i&31,(i&31)+16);if(t.length!==16)bad("slice",t.length,16)}
+function mapSetProbe(i){if(typeof Map==="undefined")return;var m=new Map();var k=obj(i);m.set(k,i);eq("map get",m.get(k),i)}
+function protoProbe(i){var base={v:i};var child=Object.create(base);child.x=i+1;eq("proto",child.v,i);delete child.x;eq("delete",child.x,void 0)}
+function jsonProbe(i){var x={a:i,b:"s"+i,c:[1,2,3]};var y=JSON.parse(JSON.stringify(x));eq("json a",y.a,i);eq("json c",y.c.length,3)}
+function pressure(i){var a=[];for(var k=0;k<700;k++)a[k]={k:k,v:"p"+i+"-"+k,o:obj(k)};roots.push(a);if(roots.length>10)roots.shift()}
+function one(i){arraySink(i);isU("merge hole",branchMerge(i));typedArray(i);regexpProbe(i);stringProbe(i);mapSetProbe(i);protoProbe(i);jsonProbe(i);if((i&255)===0)pressure(i);calls++}
+function tick(){if(!running)return;try{var st=Date.now();while(Date.now()-st<90){for(var i=0;i<180;i++)one(calls+i)}round++;setState("running");if((round&7)===0)log("ALIVE round="+round+" calls="+calls,"ok");if(Date.now()>deadline){running=false;setState("done");log("DONE 3 minutes, no BAD/EXCEPTION observed","ok");return}setTimeout(tick,0)}catch(e){failures++;running=false;setState("stopped");log("EXCEPTION "+(e&&e.stack?e.stack:e),"bad")}}
+function start(){if(running)return;running=true;deadline=Date.now()+180000;setState("running");log("START pure JSC v4, 3-minute run","warn");tick()}
 function stop(){running=false;setState("stopped");log("STOP","warn")}
-fingerprint();setState("ready");log("AUTO START in 1 second","warn");setTimeout(start,1000);
+setState("ready");log("AUTO START in 1 second","warn");setTimeout(start,1000);
 </script>
 </body>
 </html>
