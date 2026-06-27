@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PS4 13.50 WebCodecs lifetime probe</title>
+<title>PS4 WebCodecs</title>
 <style>
   :root { color-scheme: dark; font-family: system-ui, sans-serif; }
   body { max-width: 760px; margin: 2rem auto; padding: 0 1rem; background: #111; color: #eee; }
@@ -10,10 +10,10 @@
   .warning { color: #ffd479; }
 </style>
 
-<h1>PS4 13.50 WebCodecs lifetime probe</h1>
-<p class="warning">This page deliberately probes a suspected WebContent memory-safety bug. Save any crash log first. It does not contain a heap spray, address leak, or payload.</p>
-<button id="single">Run one probe</button>
-<button id="repeat">Run 32 probes</button>
+<h1>PS4 WebCodecs</h1>
+<p class="warning"> Save crash log</p>
+<button id="single">Test Primary</button>
+<button id="repeat">Test Secondary</button>
 <pre id="log"></pre>
 
 <script>
